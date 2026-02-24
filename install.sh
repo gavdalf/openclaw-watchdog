@@ -5,7 +5,7 @@
 set -euo pipefail
 
 # Config
-REPO_URL="https://github.com/gavinwhittaker/openclaw-watchdog.git"
+REPO_URL="https://github.com/gavdalf/openclaw-watchdog.git"
 VERSION="main"
 
 # Colors

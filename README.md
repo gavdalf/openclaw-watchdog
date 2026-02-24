@@ -45,7 +45,7 @@ Most issues are fixed at Tier 2 without any LLM cost.
 
 ```bash
 # Clone the repo
-git clone https://github.com/gavinwhittaker/openclaw-watchdog.git
+git clone https://github.com/gavdalf/openclaw-watchdog.git
 cd openclaw-watchdog
 
 # Run installer (auto-detects macOS/Linux, sets up scheduler)
@@ -95,7 +95,7 @@ Supported through WSL2. Quick setup:
 wsl --install
 
 # After restart, open WSL and run the standard install:
-git clone https://github.com/gavinwhittaker/openclaw-watchdog.git
+git clone https://github.com/gavdalf/openclaw-watchdog.git
 cd openclaw-watchdog
 ./install.sh
 ```
