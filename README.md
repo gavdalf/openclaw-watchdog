@@ -150,3 +150,15 @@ MIT
 
 Issues and PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 READMEOF
+
+## Disclaimer
+
+This software is provided "as is", without warranty of any kind. The authors are not responsible for any damage, data loss, or other issues that may arise from using this tool. **Use at your own risk.**
+
+By installing and running this software, you acknowledge that:
+- It will SSH into your servers and execute commands
+- It may automatically run repair operations on your OpenClaw installation
+- You are responsible for ensuring your configuration is correct
+- You should test in a non-production environment first
+
+See [LICENSE](LICENSE) for full terms.
