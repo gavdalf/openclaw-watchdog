@@ -1,0 +1,22 @@
+# Config with secrets
+.env
+
+# Logs
+logs/
+*.log
+
+# State files
+.failure-count
+
+# OpenClaw docs (local reference only, not for distribution)
+docs/
+
+# macOS
+.DS_Store
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

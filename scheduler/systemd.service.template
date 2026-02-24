@@ -1,0 +1,12 @@
+[Unit]
+Description=OpenClaw Watchdog - Self-healing gateway monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart={{INSTALL_DIR}}/bin/watchdog-check.sh
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+
+[Install]
+WantedBy=multi-user.target
