@@ -127,7 +127,7 @@ check_health() {
     local health_json
     health_json=$($SSH_CMD "openclaw health --json" 2>/dev/null) || return 1
     
-    echo "$health_json" | jq -e '.healthy == true' >/dev/null 2>&1
+    echo "$health_json" | jq -e '.ok == true' >/dev/null 2>&1
 }
 
 # === Repair ===
