@@ -1,6 +1,6 @@
 #!/bin/bash
 # OpenClaw Watchdog - Gateway Health Monitor
-# https://github.com/gavinwhittaker/openclaw-watchdog
+# https://github.com/openclaw/openclaw-watchdog
 
 set -euo pipefail
 

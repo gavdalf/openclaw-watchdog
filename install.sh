@@ -5,7 +5,7 @@
 set -euo pipefail
 
 # Config
-REPO_URL="https://github.com/gavdalf/openclaw-watchdog.git"
+REPO_URL="https://github.com/openclaw/openclaw-watchdog.git"
 VERSION="main"
 
 # Colors
@@ -109,7 +109,14 @@ read -p "ntfy topic (e.g., my-watchdog-alerts, or Enter to skip): " NTFY_TOPIC
 read -p "Discord webhook URL (or Enter to skip): " DISCORD_WEBHOOK_URL
 
 echo ""
-echo -e "${BLUE}Step 4: Installing${NC}"
+echo -e "${BLUE}Step 4: Model Health Fallback${NC}"
+echo "-----------------------------"
+echo "Model Health Check monitors Anthropic overload (HTTP 529) and can switch to a fallback model."
+read -p "Preferred fallback model [openrouter/anthropic/claude-sonnet-4-6]: " MODEL_HEALTH_FALLBACK_MODEL
+MODEL_HEALTH_FALLBACK_MODEL=${MODEL_HEALTH_FALLBACK_MODEL:-openrouter/anthropic/claude-sonnet-4-6}
+
+echo ""
+echo -e "${BLUE}Step 5: Installing${NC}"
 echo "------------------"
 
 # Clone or update repo
@@ -149,6 +156,13 @@ DISCORD_WEBHOOK_URL="$DISCORD_WEBHOOK_URL"
 MAX_REPAIR_ATTEMPTS="2"
 ENABLE_CONFIG_BACKUP="true"
 OPENCLAW_CONFIG_DIR="~/.openclaw"
+
+# Model Health Check
+MODEL_HEALTH_PRIMARY_MODEL="anthropic/claude-sonnet-4-6"
+MODEL_HEALTH_FALLBACK_MODEL="$MODEL_HEALTH_FALLBACK_MODEL"
+MODEL_HEALTH_PROBE_MODEL="anthropic/claude-haiku-4-5"
+# Optional override, defaults to OPENROUTER_API_KEY if unset
+MODEL_HEALTH_API_KEY=""
 ENVFILE
 chmod 600 "$INSTALL_DIR/.env"
 echo -e "${GREEN}✓${NC} Config written"
@@ -163,7 +177,7 @@ if [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]]; then
 fi
 
 echo ""
-echo -e "${BLUE}Step 5: Scheduler Setup${NC}"
+echo -e "${BLUE}Step 6: Scheduler Setup${NC}"
 echo "-----------------------"
 
 if [[ "$PLATFORM" == "macos" ]]; then
@@ -230,6 +244,23 @@ TIMERFILE
     echo -e "${GREEN}✓${NC} Systemd timer installed (runs every 2 minutes)"
 fi
 
+echo ""
+echo -e "${BLUE}Step 7: Model Health Cron Setup${NC}"
+echo "--------------------------------"
+if command -v crontab >/dev/null 2>&1; then
+    CRON_MARKER="# openclaw-watchdog-model-health"
+    CRON_CMD="WATCHDOG_CONFIG=$INSTALL_DIR/.env $INSTALL_DIR/bin/model-health-check.sh >> $INSTALL_DIR/logs/model-health-cron.log 2>&1"
+    (
+        crontab -l 2>/dev/null | grep -v "openclaw-watchdog-model-health" || true
+        echo "*/5 * * * * $CRON_CMD $CRON_MARKER"
+    ) | crontab -
+    echo -e "${GREEN}✓${NC} Cron entry installed (every 5 minutes)"
+    echo "  It detects Anthropic overload (HTTP 529), switches to your fallback model, and switches back on recovery."
+else
+    echo -e "${YELLOW}⚠${NC} crontab command not found. Add this manually:"
+    echo "  */5 * * * * WATCHDOG_CONFIG=$INSTALL_DIR/.env $INSTALL_DIR/bin/model-health-check.sh >> $INSTALL_DIR/logs/model-health-cron.log 2>&1 # openclaw-watchdog-model-health"
+fi
+
 # Done!
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -240,6 +271,8 @@ echo "Watchdog is now monitoring: $SSH_HOST"
 echo ""
 echo "Useful commands:"
 echo "  Manual check:   $INSTALL_DIR/bin/watchdog-check.sh"
+echo "  Model check:    WATCHDOG_CONFIG=$INSTALL_DIR/.env $INSTALL_DIR/bin/model-health-check.sh"
+echo "  Model test:     WATCHDOG_CONFIG=$INSTALL_DIR/.env $INSTALL_DIR/bin/model-health-check.sh --test"
 echo "  View logs:      tail -f $INSTALL_DIR/logs/\$(date +%Y-%m-%d).log"
 echo "  Edit config:    nano $INSTALL_DIR/.env"
 echo ""
@@ -248,4 +281,5 @@ echo "  • Every 2 minutes, watchdog checks your gateway"
 echo "  • After 2 consecutive failures, it auto-repairs"
 echo "  • Before repair, it snapshots your config (git)"
 echo "  • You get notified on recovery or if it needs help"
+echo "  • Every 5 minutes, model-health-check handles Anthropic overload failover/recovery"
 echo ""

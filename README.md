@@ -1,146 +1,161 @@
 # openclaw-watchdog
 
-> Self-healing monitoring for OpenClaw gateways. Runs out-of-band, detects failures, auto-repairs.
+Self-healing monitoring for OpenClaw gateways. Runs out-of-band, detects failures, and auto-repairs.
 
 ## How It Works
 
-The watchdog runs on a **separate machine** from your OpenClaw instance. This "out-of-band" design means if your gateway crashes, the watchdog is still alive to detect and fix it.
+The watchdog runs on a separate machine from your OpenClaw instance. This out-of-band design means if your gateway host is unhealthy, monitoring and alerting are still alive.
 
-```
+```text
 ┌─────────────────────┐         SSH          ┌─────────────────────┐
 │   WATCHDOG HOST     │ ──────────────────▶  │   OPENCLAW HOST     │
 │   (Mac/Linux/WSL)   │                      │   (VPS/Server)      │
 │                     │   openclaw health    │                     │
-│   Runs every 2 min  │ ◀────────────────── │   Your gateway      │
-│   Detects failures  │        JSON          │   lives here        │
+│   Runs every 2 min  │ ◀────────────────── │   Gateway runtime   │
+│   Detects failures  │        JSON          │                     │
 │   Triggers repairs  │                      │                     │
 └─────────────────────┘                      └─────────────────────┘
 
-         │                                            │
-         │  If unhealthy:                             │
-         │  1. Try: openclaw doctor --repair          │
-         │  2. If still broken: notify you            │
-         └────────────────────────────────────────────┘
+┌─────────────────────┐      HTTPS probes     ┌─────────────────────┐
+│ MODEL HEALTH CHECK  │ ───────────────────▶  │ OpenRouter API      │
+│ (every 5 min, cron) │                       │ (Anthropic status)  │
+│ - Detects HTTP 529  │                       └─────────────────────┘
+│ - Switches model    │
+│ - Switches back     │
+└─────────────────────┘
 ```
 
 ## Recovery Tiers
 
 | Tier | Action | Cost |
 |------|--------|------|
-| 1 | `openclaw health --json` | Free (fast check) |
-| 2 | `openclaw doctor --repair --yes` | Free (auto-fix) |
-| 3 | Notification (Telegram/Discord/ntfy) | Free |
-| 4 | Claude Code diagnosis (future) | ~$0.10 per incident |
+| 1 | `openclaw health --json` | Free |
+| 2 | `openclaw doctor --repair --yes` | Free |
+| 3 | Notification (Telegram/ntfy/Discord) | Free |
+| 4 | Model provider failover (Anthropic ⇄ OpenRouter) | Free |
 
-Most issues are fixed at Tier 2 without any LLM cost.
+## Model Health Check
+
+`bin/model-health-check.sh` detects Anthropic overload events (for example HTTP `529`) using an API probe, then:
+
+1. Switches gateway primary model to your configured fallback model.
+2. Sends a notification.
+3. Keeps monitoring.
+4. Switches back to the primary Anthropic model after recovery.
+
+A state file prevents repeated flip-flopping and tracks prior switch status.
+
+### Test Mode
+
+```bash
+WATCHDOG_CONFIG=.env ./bin/model-health-check.sh --test
+```
+
+`--test` simulates an Anthropic `529` event, logs actions, and shows what would happen without applying config changes.
 
 ## Requirements
 
-- **Watchdog machine:** macOS, Linux, or Windows (via WSL2)
-- **SSH access** to your OpenClaw host (key-based auth recommended)
-- **OpenClaw CLI** installed on the target host
-- **(Optional)** Telegram bot token for notifications
+- Watchdog machine: macOS, Linux, or Windows (via WSL2)
+- SSH access to your OpenClaw host (key-based auth recommended)
+- OpenClaw CLI installed on the target host
+- `jq`, `curl`, `ssh`, `git`
+- Optional notifications (Telegram/ntfy/Discord)
 
 ## Quick Install
 
 ```bash
-# Clone the repo
-git clone https://github.com/gavdalf/openclaw-watchdog.git
+git clone https://github.com/openclaw/openclaw-watchdog.git
 cd openclaw-watchdog
-
-# Run installer (auto-detects macOS/Linux, sets up scheduler)
 ./install.sh
 ```
 
-The installer will:
-1. Prompt for your OpenClaw host details (SSH user, host, key path)
-2. Set up the health check script
-3. Configure the scheduler (launchd on macOS, systemd on Linux)
-4. Optionally configure Telegram notifications
+Installer actions:
+
+1. Prompts for OpenClaw SSH connection.
+2. Configures health/repair monitoring.
+3. Configures notifications.
+4. Prompts for preferred fallback model.
+5. Installs watchdog scheduler (launchd on macOS, systemd on Linux).
+6. Installs a cron job every 5 minutes for model health failover checks.
 
 ## Configuration
 
-All settings live in `.env`:
+All settings live in `.env`.
+
+### Core Watchdog
 
 ```bash
-# SSH connection to your OpenClaw host
 SSH_USER="root"
 SSH_HOST="your-vps.example.com"
 SSH_KEY="~/.ssh/id_ed25519"
 SSH_PORT="22"
 
-# Notifications (optional)
-TELEGRAM_BOT_TOKEN=""      # From @BotFather
-TELEGRAM_CHAT_ID=""        # Your user/group ID
+TELEGRAM_BOT_TOKEN=""
+TELEGRAM_CHAT_ID=""
+NTFY_TOPIC=""
+NTFY_SERVER="https://ntfy.sh"
+DISCORD_WEBHOOK_URL=""
 
-# Behavior
-CHECK_INTERVAL="120"       # Seconds between checks
-MAX_REPAIR_ATTEMPTS="2"    # Before escalating to notification
-LOG_RETENTION_DAYS="7"     # How long to keep logs
+MAX_REPAIR_ATTEMPTS="2"
+ENABLE_CONFIG_BACKUP="true"
+OPENCLAW_CONFIG_DIR="~/.openclaw"
+```
+
+### Model Health Check
+
+```bash
+MODEL_HEALTH_PRIMARY_MODEL="anthropic/claude-sonnet-4-6"
+MODEL_HEALTH_FALLBACK_MODEL="openrouter/anthropic/claude-sonnet-4-6"
+MODEL_HEALTH_PROBE_MODEL="anthropic/claude-haiku-4-5"
+MODEL_HEALTH_API_BASE="https://openrouter.ai/api/v1"
+MODEL_HEALTH_API_KEY=""                 # optional override
+OPENROUTER_API_KEY=""                   # used if MODEL_HEALTH_API_KEY is empty
+MODEL_HEALTH_OVERLOAD_CODES="529 503 502 429"
+MODEL_HEALTH_STATE_DIR=""               # default: ${XDG_DATA_HOME:-$HOME/.config}/openclaw-watchdog
+MODEL_HEALTH_STATE_FILE=""              # optional exact state file path
+MODEL_HEALTH_LOG_DIR=""                 # default: <install>/logs
+MODEL_HEALTH_LOG_FILE=""                # optional exact log file path
+OPENCLAW_CMD="openclaw"
+```
+
+State location defaults to `${XDG_DATA_HOME:-$HOME/.config}/openclaw-watchdog/model-health-state.json`.
+
+## Manual Commands
+
+```bash
+./bin/watchdog-check.sh
+WATCHDOG_CONFIG=.env ./bin/model-health-check.sh
+WATCHDOG_CONFIG=.env ./bin/model-health-check.sh --test
+./bin/test-notify.sh "Test message"
 ```
 
 ## Platform Support
 
 ### macOS
-Fully supported. Uses launchd with automatic start on boot.
+
+Supported via launchd for watchdog checks + cron for model health checks.
 
 ### Linux
-Fully supported. Uses systemd with automatic start on boot.
 
-### Windows (via WSL2)
-Supported through WSL2. Quick setup:
+Supported via systemd user timer for watchdog checks + cron for model health checks.
 
-```powershell
-# Install WSL2 (run in PowerShell as Administrator)
-wsl --install
+### Windows (WSL2)
 
-# After restart, open WSL and run the standard install:
-git clone https://github.com/gavdalf/openclaw-watchdog.git
-cd openclaw-watchdog
-./install.sh
-```
-
-WSL2 services persist in the background. For guaranteed uptime, enable systemd in WSL:
-```bash
-# In /etc/wsl.conf
-[boot]
-systemd=true
-```
-
-> **Note:** Native Windows (PowerShell + Task Scheduler) support may be added in a future release if there's demand.
-
-## Manual Commands
-
-```bash
-# Run a health check manually
-./bin/watchdog-check.sh
-
-# View recent logs
-tail -f logs/watchdog.log
-
-# Test notifications
-./bin/test-notify.sh "Test message"
-```
+Supported through WSL2 with the same install process.
 
 ## Notifications
 
-Currently supported:
-- **Telegram** — Instant alerts to your phone
-- **ntfy** — Self-hosted or ntfy.sh
-- **Discord** — Webhook-based (coming soon)
-
-Future: Apprise integration for 80+ notification services.
+- Telegram
+- ntfy
+- Discord webhook
 
 ## Architecture Decisions
 
-**Why out-of-band?**
-If the watchdog runs on the same machine as OpenClaw, a kernel panic or full system freeze takes down both. Running remotely ensures the watchdog survives to detect and report the issue.
+Why out-of-band: if the gateway host fails, watchdog checks and notifications still run.
 
-**Why tiered recovery?**
-Most OpenClaw issues are transient (port conflicts, stale locks, config drift). `openclaw doctor` fixes these automatically. LLM-based diagnosis is reserved for genuinely novel failures — keeping costs near zero for normal operation.
+Why tiered recovery: most issues are transient and solvable by `openclaw doctor`; failover adds model-level resilience during provider incidents.
 
-**Why bash?**
-Minimal dependencies, runs anywhere, easy to audit. A Python rewrite with Apprise integration is on the roadmap for v2.
+Why shell scripts: minimal dependencies, transparent behavior, easy auditing.
 
 ## License
 
@@ -148,17 +163,17 @@ MIT
 
 ## Contributing
 
-Issues and PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-READMEOF
+Issues and PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Disclaimer
 
-This software is provided "as is", without warranty of any kind. The authors are not responsible for any damage, data loss, or other issues that may arise from using this tool. **Use at your own risk.**
+This software is provided "as is", without warranty of any kind. Use at your own risk.
 
 By installing and running this software, you acknowledge that:
-- It will SSH into your servers and execute commands
-- It may automatically run repair operations on your OpenClaw installation
-- You are responsible for ensuring your configuration is correct
-- You should test in a non-production environment first
+
+- It will SSH into your servers and execute commands.
+- It may automatically run repair operations on your OpenClaw installation.
+- Model routing may be patched automatically during provider incidents.
+- You are responsible for validating your configuration and testing safely.
 
 See [LICENSE](LICENSE) for full terms.
