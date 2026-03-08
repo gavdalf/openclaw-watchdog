@@ -30,7 +30,7 @@ echo "================================================"
 echo ""
 
 # Check dependencies
-for cmd in git ssh curl jq; do
+for cmd in git ssh curl jq python3; do
     if ! command -v $cmd &>/dev/null; then
         echo -e "${RED}Missing required command: $cmd${NC}"
         exit 1
@@ -116,7 +116,23 @@ read -p "Preferred fallback model [openrouter/anthropic/claude-sonnet-4-6]: " MO
 MODEL_HEALTH_FALLBACK_MODEL=${MODEL_HEALTH_FALLBACK_MODEL:-openrouter/anthropic/claude-sonnet-4-6}
 
 echo ""
-echo -e "${BLUE}Step 5: Installing${NC}"
+echo -e "${BLUE}Step 5: Auth Sentinel (optional)${NC}"
+echo "--------------------------------"
+read -p "Enable Anthropic OAuth monitoring? [y/N]: " ENABLE_AUTH_SENTINEL_INPUT
+ENABLE_AUTH_SENTINEL="false"
+AUTH_SENTINEL_CLAUDE_CREDS="$HOME/.claude/.credentials.json"
+AUTH_SENTINEL_OPENCLAW_AUTH="$HOME/.openclaw/agents/main/agent/auth-profiles.json"
+AUTH_SENTINEL_GATEWAY_LOG="$INSTALL_DIR/logs/$(date +%Y-%m-%d).log"
+if [[ "$ENABLE_AUTH_SENTINEL_INPUT" =~ ^[Yy]$ ]]; then
+    ENABLE_AUTH_SENTINEL="true"
+    read -p "Claude credentials path [$AUTH_SENTINEL_CLAUDE_CREDS]: " AUTH_SENTINEL_CLAUDE_CREDS_INPUT
+    AUTH_SENTINEL_CLAUDE_CREDS=${AUTH_SENTINEL_CLAUDE_CREDS_INPUT:-$AUTH_SENTINEL_CLAUDE_CREDS}
+    read -p "OpenClaw auth-profiles path [$AUTH_SENTINEL_OPENCLAW_AUTH]: " AUTH_SENTINEL_OPENCLAW_AUTH_INPUT
+    AUTH_SENTINEL_OPENCLAW_AUTH=${AUTH_SENTINEL_OPENCLAW_AUTH_INPUT:-$AUTH_SENTINEL_OPENCLAW_AUTH}
+fi
+
+echo ""
+echo -e "${BLUE}Step 6: Installing${NC}"
 echo "------------------"
 
 # Clone or update repo
@@ -163,6 +179,16 @@ MODEL_HEALTH_FALLBACK_MODEL="$MODEL_HEALTH_FALLBACK_MODEL"
 MODEL_HEALTH_PROBE_MODEL="anthropic/claude-haiku-4-5"
 # Optional override, defaults to OPENROUTER_API_KEY if unset
 MODEL_HEALTH_API_KEY=""
+
+# Auth Sentinel
+ENABLE_AUTH_SENTINEL="$ENABLE_AUTH_SENTINEL"
+AUTH_SENTINEL_CLAUDE_CREDS="$AUTH_SENTINEL_CLAUDE_CREDS"
+AUTH_SENTINEL_OPENCLAW_AUTH="$AUTH_SENTINEL_OPENCLAW_AUTH"
+AUTH_SENTINEL_GATEWAY_LOG="$AUTH_SENTINEL_GATEWAY_LOG"
+AUTH_SENTINEL_REFRESH_THRESHOLD_MINS="90"
+AUTH_SENTINEL_COOLDOWN_SECS="300"
+AUTH_SENTINEL_OAUTH_CLIENT_ID="9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+AUTH_SENTINEL_VERIFY_MODEL="claude-haiku-4-5"
 ENVFILE
 chmod 600 "$INSTALL_DIR/.env"
 echo -e "${GREEN}✓${NC} Config written"
@@ -177,7 +203,7 @@ if [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]]; then
 fi
 
 echo ""
-echo -e "${BLUE}Step 6: Scheduler Setup${NC}"
+echo -e "${BLUE}Step 7: Scheduler Setup${NC}"
 echo "-----------------------"
 
 if [[ "$PLATFORM" == "macos" ]]; then
@@ -245,7 +271,7 @@ TIMERFILE
 fi
 
 echo ""
-echo -e "${BLUE}Step 7: Model Health Cron Setup${NC}"
+echo -e "${BLUE}Step 8: Model Health Cron Setup${NC}"
 echo "--------------------------------"
 if command -v crontab >/dev/null 2>&1; then
     CRON_MARKER="# openclaw-watchdog-model-health"
@@ -261,6 +287,25 @@ else
     echo "  */5 * * * * WATCHDOG_CONFIG=$INSTALL_DIR/.env $INSTALL_DIR/bin/model-health-check.sh >> $INSTALL_DIR/logs/model-health-cron.log 2>&1 # openclaw-watchdog-model-health"
 fi
 
+echo ""
+echo -e "${BLUE}Step 9: Auth Sentinel Cron Setup${NC}"
+echo "--------------------------------"
+if [[ "$ENABLE_AUTH_SENTINEL" != "true" ]]; then
+    echo "Skipped. OAuth monitoring not enabled."
+elif command -v crontab >/dev/null 2>&1; then
+    CRON_MARKER="# openclaw-watchdog-auth-sentinel"
+    CRON_CMD="WATCHDOG_CONFIG=$INSTALL_DIR/.env $INSTALL_DIR/bin/auth-sentinel.sh >> $INSTALL_DIR/logs/auth-sentinel-cron.log 2>&1"
+    (
+        crontab -l 2>/dev/null | grep -v "openclaw-watchdog-auth-sentinel" || true
+        echo "*/5 * * * * $CRON_CMD $CRON_MARKER"
+    ) | crontab -
+    echo -e "${GREEN}✓${NC} Cron entry installed (every 5 minutes)"
+    echo "  It refreshes expiring Anthropic OAuth tokens, syncs OpenClaw auth profiles, reloads secrets, and verifies the token."
+else
+    echo -e "${YELLOW}⚠${NC} crontab command not found. Add this manually:"
+    echo "  */5 * * * * WATCHDOG_CONFIG=$INSTALL_DIR/.env $INSTALL_DIR/bin/auth-sentinel.sh >> $INSTALL_DIR/logs/auth-sentinel-cron.log 2>&1 # openclaw-watchdog-auth-sentinel"
+fi
+
 # Done!
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -273,6 +318,8 @@ echo "Useful commands:"
 echo "  Manual check:   $INSTALL_DIR/bin/watchdog-check.sh"
 echo "  Model check:    WATCHDOG_CONFIG=$INSTALL_DIR/.env $INSTALL_DIR/bin/model-health-check.sh"
 echo "  Model test:     WATCHDOG_CONFIG=$INSTALL_DIR/.env $INSTALL_DIR/bin/model-health-check.sh --test"
+echo "  Auth check:     WATCHDOG_CONFIG=$INSTALL_DIR/.env $INSTALL_DIR/bin/auth-sentinel.sh"
+echo "  Auth test:      WATCHDOG_CONFIG=$INSTALL_DIR/.env $INSTALL_DIR/bin/auth-sentinel.sh --test"
 echo "  View logs:      tail -f $INSTALL_DIR/logs/\$(date +%Y-%m-%d).log"
 echo "  Edit config:    nano $INSTALL_DIR/.env"
 echo ""
@@ -282,4 +329,7 @@ echo "  • After 2 consecutive failures, it auto-repairs"
 echo "  • Before repair, it snapshots your config (git)"
 echo "  • You get notified on recovery or if it needs help"
 echo "  • Every 5 minutes, model-health-check handles Anthropic overload failover/recovery"
+if [[ "$ENABLE_AUTH_SENTINEL" == "true" ]]; then
+echo "  • Every 5 minutes, auth-sentinel refreshes expiring Anthropic OAuth tokens and syncs them into OpenClaw"
+fi
 echo ""
